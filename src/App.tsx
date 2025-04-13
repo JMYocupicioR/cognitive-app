@@ -1,73 +1,109 @@
 import React, { Suspense } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { GoogleReCaptchaProvider } from 'react-google-recaptcha-v3';
+import { ErrorBoundary } from 'react-error-boundary';
 import { AuthProvider } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
 import LoginPage from './pages/LoginPage';
+import LandingPage from './pages/LandingPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorFallback from './components/ErrorFallback';
+import LoadingSpinner from './components/LoadingSpinner';
 import { UserRole } from './types';
-import { LazyMedicalRecordEntry, LazyProgressDashboard, LazyRegisterForm } from './utils/lazyImports';
+import { 
+  LazyMedicalRecordEntry, 
+  LazyProgressDashboard, 
+  LazyRegisterForm,
+  LazyExercisesPage,
+  LazyProfilePage 
+} from './utils/lazyImports';
 
-// Loading fallback component
 const LoadingFallback = () => (
   <div className="min-h-screen flex items-center justify-center">
-    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+    <LoadingSpinner size="lg" />
   </div>
 );
 
 function App() {
   return (
-    <GoogleReCaptchaProvider
-      reCaptchaKey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
-      scriptProps={{
-        async: true,
-        defer: true,
-        appendTo: 'head',
-      }}
+    <ErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onError={(error) => console.error('Application error:', error)}
     >
-      <AuthProvider>
-        <Router>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              {/* Public routes */}
-              <Route path="/login" element={<LoginPage />} />
-              <Route 
-                path="/register" 
-                element={
-                  <Suspense fallback={<LoadingFallback />}>
-                    <LazyRegisterForm />
-                  </Suspense>
-                } 
-              />
-              <Route path="/unauthorized" element={<UnauthorizedPage />} />
+      <GoogleReCaptchaProvider
+        reCaptchaKey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
+        scriptProps={{
+          async: true,
+          defer: true,
+          appendTo: 'body',
+          nonce: undefined
+        }}
+        language="es"
+        useEnterprise={false}
+        useRecaptchaNet={false}
+        container={{
+          parameters: {
+            badge: 'bottomright',
+            size: 'invisible'
+          }
+        }}
+      >
+        <AuthProvider>
+          <Router>
+            <Suspense fallback={<LoadingFallback />}>
+              <Routes>
+                {/* Public routes */}
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<LazyRegisterForm />} />
+                <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-              {/* Protected routes */}
-              <Route
-                path="/medical-records"
-                element={
-                  <ProtectedRoute allowedRoles={[UserRole.DOCTOR, UserRole.ADMIN]}>
-                    <Suspense fallback={<LoadingFallback />}>
+                {/* Protected routes */}
+                <Route
+                  path="/dashboard"
+                  element={
+                    <ProtectedRoute>
+                      <Dashboard />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/profile"
+                  element={
+                    <ProtectedRoute>
+                      <LazyProfilePage />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/exercises"
+                  element={
+                    <ProtectedRoute allowedRoles={[UserRole.PATIENT]}>
+                      <LazyExercisesPage />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/medical-records"
+                  element={
+                    <ProtectedRoute allowedRoles={[UserRole.DOCTOR, UserRole.ADMIN]}>
                       <LazyMedicalRecordEntry />
-                    </Suspense>
-                  </ProtectedRoute>
-                }
-              />
+                    </ProtectedRoute>
+                  }
+                />
 
-              {/* Default route */}
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <Dashboard />
-                  </ProtectedRoute>
-                }
-              />
-            </Routes>
-          </Suspense>
-        </Router>
-      </AuthProvider>
-    </GoogleReCaptchaProvider>
+                {/* Catch all route */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </Router>
+        </AuthProvider>
+      </GoogleReCaptchaProvider>
+    </ErrorBoundary>
   );
 }
 

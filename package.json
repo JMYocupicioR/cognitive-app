@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,7 +24,11 @@
     "crypto-js": "^4.2.0",
     "dompurify": "^3.0.9",
     "xss": "^1.0.14",
-    "helmet": "^7.1.0"
+    "helmet": "^7.1.0",
+    "react-error-boundary": "^4.0.13",
+    "node-fetch": "^3.3.2",
+    "jose": "^5.2.3",
+    "rate-limiter-flexible": "^5.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

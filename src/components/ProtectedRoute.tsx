@@ -1,6 +1,9 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
+import { ErrorBoundary } from 'react-error-boundary';
 import { useAuth } from '../contexts/AuthContext';
+import ErrorFallback from './ErrorFallback';
+import LoadingSpinner from './LoadingSpinner';
 import type { UserRole } from '../types';
 
 interface ProtectedRouteProps {
@@ -21,7 +24,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <LoadingSpinner size="lg" />
       </div>
     );
   }
@@ -38,8 +41,18 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/unauthorized" replace />;
   }
 
-  // If all checks pass, render the protected component
-  return <>{children}</>;
+  // If user is authenticated but trying to access login/register pages,
+  // redirect to dashboard
+  if (isAuthenticated && ['/login', '/register'].includes(location.pathname)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // If all checks pass, render the protected component with error boundary
+  return (
+    <ErrorBoundary FallbackComponent={ErrorFallback}>
+      {children}
+    </ErrorBoundary>
+  );
 };
 
 export default ProtectedRoute;
