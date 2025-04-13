@@ -1,77 +1,70 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useEffect, useState, useCallback, useContext } from 'react';
 import { User, AuthError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import type { BaseUser, UserRole, RegisterFormData } from '../types';
+import type { BaseUser, UserRole, AuthContextType, AuthState } from '../types';
 import { securityAuditService } from '../services/SecurityAuditService';
+import { AppError, ErrorType, handleError, tryCatch } from '../utils/errorHandling';
 
-// Constants
-const TOKEN_REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutes in ms
-const SESSION_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours in ms
+// Constantes
+const TOKEN_REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutos en ms
+const SESSION_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas en ms
 const MAX_RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_BASE = 2000; // Base delay in ms
+const RETRY_DELAY_BASE = 2000; // Delay base en ms
 
-interface AuthState {
-  user: BaseUser | null;
-  session: User | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  userRole: UserRole | null;
-  error: AuthError | null;
+// Valor inicial para el estado de autenticación
+const initialAuthState: AuthState = {
+  user: null,
+  session: null,
+  isLoading: true,
+  isAuthenticated: false,
+  userRole: null,
+  error: null
+};
+
+// Crear el contexto de autenticación
+export const AuthContext = createContext<AuthContextType | null>(null);
+
+interface AuthProviderProps {
+  children: React.ReactNode;
 }
 
-interface AuthContextType extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
-  register: (data: RegisterFormData) => Promise<void>;
-  clearError: () => void;
-  refreshSession: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | null>(null);
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-}
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    user: null,
-    session: null,
-    isLoading: true,
-    isAuthenticated: false,
-    userRole: null,
-    error: null
-  });
+export function AuthProvider({ children }: AuthProviderProps) {
+  const [state, setState] = useState<AuthState>(initialAuthState);
   const [lastActivity, setLastActivity] = useState<number>(Date.now());
   const [retryCount, setRetryCount] = useState(0);
 
-  // Initialize auth state
+  // Inicializar estado de autenticación
   useEffect(() => {
     const initializeAuth = async () => {
-      try {
+      await tryCatch(async () => {
         setState(prev => ({ ...prev, isLoading: true }));
         const { data: { session }, error } = await supabase.auth.getSession();
         
-        if (error) throw error;
+        if (error) throw new AppError({
+          message: error.message,
+          type: ErrorType.AUTHENTICATION,
+          details: { supabaseError: error }
+        });
         
         if (session) {
           await handleAuthChange(session.user);
         } else {
           setState(prev => ({ ...prev, isLoading: false }));
         }
-      } catch (error) {
-        console.error('Error initializing auth:', error);
-        setState(prev => ({ ...prev, isLoading: false }));
-      }
+      }, 
+      (error) => {
+        setState(prev => ({ 
+          ...prev, 
+          isLoading: false,
+          error: error instanceof AuthError ? error : new AuthError(error.message)
+        }));
+      }, 
+      'initializeAuth');
     };
 
     initializeAuth();
 
-    // Set up auth state change listener
+    // Configurar listener para cambios de estado de autenticación
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session) {
         await handleAuthChange(session.user);
@@ -92,7 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Clear error after timeout
+  // Limpiar error después de un tiempo
   useEffect(() => {
     if (state.error) {
       const timer = setTimeout(() => {
@@ -102,7 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.error]);
 
-  // Monitor user activity
+  // Monitorear actividad del usuario
   useEffect(() => {
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
     const updateActivity = () => setLastActivity(Date.now());
@@ -111,7 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => events.forEach(event => window.removeEventListener(event, updateActivity));
   }, []);
 
-  // Check session expiry
+  // Verificar expiración de sesión
   useEffect(() => {
     const checkSession = () => {
       const now = Date.now();
@@ -124,27 +117,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, [lastActivity]);
 
+  // Función para refrescar la sesión
   const refreshSession = useCallback(async () => {
-    try {
+    await tryCatch(async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
-      const expiresAt = new Date(session.expires_at!).getTime();
+      const expiresAt = session.expires_at ? new Date(session.expires_at * 1000).getTime() : 0;
       const now = Date.now();
       
       if (expiresAt - now < TOKEN_REFRESH_THRESHOLD) {
         const { data: { session: newSession }, error } = await supabase.auth.refreshSession();
         
-        if (error) throw error;
+        if (error) throw new AppError({
+          message: error.message,
+          type: ErrorType.AUTHENTICATION,
+          details: { supabaseError: error }
+        });
 
         if (newSession) {
           await handleAuthChange(newSession.user);
           setRetryCount(0);
         }
       }
-    } catch (error) {
-      console.error('Error refreshing session:', error);
-      
+    }, 
+    (error) => {
       if (retryCount < MAX_RETRY_ATTEMPTS) {
         const delay = RETRY_DELAY_BASE * Math.pow(2, retryCount);
         setTimeout(() => {
@@ -158,17 +155,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isLoading: false
         }));
       }
-    }
+    }, 
+    'refreshSession');
   }, [retryCount]);
 
-  // Auto refresh token
+  // Auto-refrescar token
   useEffect(() => {
     const interval = setInterval(refreshSession, TOKEN_REFRESH_THRESHOLD);
     return () => clearInterval(interval);
   }, [refreshSession]);
 
+  // Manejar cambio de estado de autenticación
   const handleAuthChange = useCallback(async (authUser: User) => {
-    try {
+    await tryCatch(async () => {
       setState(prev => ({ ...prev, isLoading: true }));
 
       const { data: profile, error: profileError } = await supabase
@@ -177,7 +176,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', authUser.id)
         .single();
 
-      if (profileError) throw profileError;
+      if (profileError) throw new AppError({
+        message: profileError.message,
+        type: ErrorType.API,
+        details: { supabaseError: profileError }
+      });
 
       if (profile) {
         const baseUser: BaseUser = {
@@ -210,18 +213,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'low'
         );
       }
-    } catch (error) {
-      console.error('Error fetching user profile:', error);
+    }, 
+    (error) => {
       setState(prev => ({
         ...prev,
-        error: error as AuthError,
+        error: error instanceof AuthError ? error : new AuthError(error.message),
         isLoading: false
       }));
-    }
+    }, 
+    'handleAuthChange');
   }, []);
 
+  // Función de inicio de sesión
   const login = async (email: string, password: string) => {
-    try {
+    await tryCatch(async () => {
       setState(prev => ({ ...prev, error: null, isLoading: true }));
 
       const { data: { session }, error } = await supabase.auth.signInWithPassword({
@@ -239,34 +244,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           },
           'medium'
         );
-        throw error;
+        throw new AppError({
+          message: error.message,
+          type: ErrorType.AUTHENTICATION,
+          details: { supabaseError: error }
+        });
       }
 
       if (session) {
         await handleAuthChange(session.user);
       }
-
-    } catch (error) {
-      console.error('Error in login:', error);
+    }, 
+    (error) => {
       setState(prev => ({
         ...prev,
-        error: error as AuthError,
+        error: error instanceof AuthError ? error : new AuthError(error.message),
         isLoading: false
       }));
       throw error;
-    }
+    }, 
+    'login');
   };
 
-  const register = async (data: RegisterFormData) => {
-    try {
+  // Función de registro
+  const register = async (data: any) => {
+    await tryCatch(async () => {
       setState(prev => ({ ...prev, error: null, isLoading: true }));
 
+      // Verificar código de activación si se proporciona
       if (data.activationCode) {
-        const { data: verificationResult } = await supabase
+        const { data: verificationResult, error: verificationError } = await supabase
           .rpc('verify_activation_code', { p_code: data.activationCode });
 
-        if (!verificationResult) {
-          throw new Error('Código de activación inválido');
+        if (verificationError || !verificationResult) {
+          throw new AppError({
+            message: 'Código de activación inválido',
+            type: ErrorType.VALIDATION,
+            details: { verificationError }
+          });
         }
       }
 
@@ -290,7 +305,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           },
           'medium'
         );
-        throw signUpError;
+        throw new AppError({
+          message: signUpError.message,
+          type: ErrorType.AUTHENTICATION,
+          details: { supabaseError: signUpError }
+        });
       }
 
       if (user) {
@@ -303,26 +322,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'low'
         );
       }
-
-    } catch (error) {
-      console.error('Error in registration:', error);
+    }, 
+    (error) => {
       setState(prev => ({
         ...prev,
-        error: error as AuthError,
+        error: error instanceof AuthError ? error : new AuthError(error.message),
         isLoading: false
       }));
       throw error;
-    } finally {
-      setState(prev => ({ ...prev, isLoading: false }));
-    }
+    }, 
+    'register');
+    
+    setState(prev => ({ ...prev, isLoading: false }));
   };
 
+  // Función de cierre de sesión
   const logout = async () => {
-    try {
+    await tryCatch(async () => {
       setState(prev => ({ ...prev, error: null, isLoading: true }));
       
       const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      if (error) throw new AppError({
+        message: error.message,
+        type: ErrorType.AUTHENTICATION,
+        details: { supabaseError: error }
+      });
 
       setState(prev => ({
         ...prev,
@@ -338,18 +362,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         { userId: state.user?.id },
         'low'
       );
-
-    } catch (error) {
-      console.error('Error in logout:', error);
+    }, 
+    (error) => {
       setState(prev => ({
         ...prev,
-        error: error as AuthError,
+        error: error instanceof AuthError ? error : new AuthError(error.message),
         isLoading: false
       }));
       throw error;
-    }
+    }, 
+    'logout');
   };
 
+  // Función para limpiar errores
   const clearError = () => {
     setState(prev => ({ ...prev, error: null }));
   };
@@ -368,4 +393,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+// Hook personalizado para usar el contexto de autenticación
+export function useAuth() {
+  const auth = useContext(AuthContext);
+
+  if (!auth) {
+    throw new AppError({
+      message: 'useAuth debe ser usado dentro de un AuthProvider',
+      type: ErrorType.UNEXPECTED,
+      details: { component: 'useAuth' }
+    });
+  }
+
+  return auth;
 }

@@ -6,23 +6,25 @@ import { AuthProvider } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
 import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
+import MedicalRecordPage from './pages/MedicalRecordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
+import RegisterPage from './pages/RegisterPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
-import ProtectedRoute from './components/ProtectedRoute';
 import ErrorFallback from './components/ErrorFallback';
 import LoadingSpinner from './components/LoadingSpinner';
-import { UserRole } from './types';
-import { 
-  LazyMedicalRecordEntry, 
-  LazyProgressDashboard, 
-  LazyRegisterForm,
-  LazyExercisesPage,
-  LazyProfilePage 
-} from './utils/lazyImports';
+import PageLayout from './components/common/PageLayout';
+import type { UserRole } from './types';
+
+// Lazy imports
+const LazyExercisesPage = React.lazy(() => import('./pages/ExercisesPage'));
+const LazyProfilePage = React.lazy(() => import('./pages/ProfilePage'));
 
 const LoadingFallback = () => (
-  <div className="min-h-screen flex items-center justify-center">
-    <LoadingSpinner size="lg" />
-  </div>
+  <PageLayout isLoading={true} requireAuth={false} showNavbar={false} showFooter={false}>
+    <div className="min-h-screen flex items-center justify-center">
+      <LoadingSpinner size="lg" />
+    </div>
+  </PageLayout>
 );
 
 function App() {
@@ -32,67 +34,94 @@ function App() {
       onError={(error) => console.error('Application error:', error)}
     >
       <GoogleReCaptchaProvider
-        reCaptchaKey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
+        reCaptchaKey={import.meta.env.VITE_RECAPTCHA_SITE_KEY || ''}
         scriptProps={{
           async: true,
           defer: true,
-          appendTo: 'body',
-          nonce: undefined
+          appendTo: 'head',
         }}
         language="es"
-        useEnterprise={false}
-        useRecaptchaNet={false}
-        container={{
-          parameters: {
-            badge: 'bottomright',
-            size: 'invisible'
-          }
-        }}
       >
         <AuthProvider>
           <Router>
             <Suspense fallback={<LoadingFallback />}>
               <Routes>
                 {/* Public routes */}
-                <Route path="/" element={<LandingPage />} />
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/register" element={<LazyRegisterForm />} />
-                <Route path="/unauthorized" element={<UnauthorizedPage />} />
+                <Route 
+                  path="/" 
+                  element={
+                    <PageLayout requireAuth={false} showNavbar={false} showFooter={true}>
+                      <LandingPage />
+                    </PageLayout>
+                  } 
+                />
+                <Route 
+                  path="/login" 
+                  element={
+                    <PageLayout requireAuth={false} showNavbar={false} showFooter={false}>
+                      <LoginPage />
+                    </PageLayout>
+                  } 
+                />
+                <Route 
+                  path="/register" 
+                  element={
+                    <PageLayout requireAuth={false} showNavbar={false} showFooter={false}>
+                      <RegisterPage />
+                    </PageLayout>
+                  } 
+                />
+                <Route 
+                  path="/verify-email" 
+                  element={
+                    <PageLayout requireAuth={false} showNavbar={false} showFooter={false}>
+                      <VerifyEmailPage />
+                    </PageLayout>
+                  } 
+                />
+                <Route 
+                  path="/unauthorized" 
+                  element={
+                    <PageLayout requireAuth={false} showNavbar={false} showFooter={false}>
+                      <UnauthorizedPage />
+                    </PageLayout>
+                  } 
+                />
 
                 {/* Protected routes */}
                 <Route
                   path="/dashboard"
                   element={
-                    <ProtectedRoute>
+                    <PageLayout requireAuth={true} pageTitle="Panel Principal">
                       <Dashboard />
-                    </ProtectedRoute>
+                    </PageLayout>
                   }
                 />
 
                 <Route
                   path="/profile"
                   element={
-                    <ProtectedRoute>
+                    <PageLayout requireAuth={true} pageTitle="Perfil">
                       <LazyProfilePage />
-                    </ProtectedRoute>
+                    </PageLayout>
                   }
                 />
 
                 <Route
                   path="/exercises"
                   element={
-                    <ProtectedRoute allowedRoles={[UserRole.PATIENT]}>
+                    <PageLayout requireAuth={true} pageTitle="Ejercicios">
                       <LazyExercisesPage />
-                    </ProtectedRoute>
+                    </PageLayout>
                   }
                 />
 
                 <Route
                   path="/medical-records"
                   element={
-                    <ProtectedRoute allowedRoles={[UserRole.DOCTOR, UserRole.ADMIN]}>
-                      <LazyMedicalRecordEntry />
-                    </ProtectedRoute>
+                    <PageLayout requireAuth={true} pageTitle="Expediente Médico">
+                      <MedicalRecordPage />
+                    </PageLayout>
                   }
                 />
 

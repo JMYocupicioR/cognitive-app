@@ -5,14 +5,14 @@ const RECAPTCHA_SECRET_KEY = Deno.env.get('RECAPTCHA_SECRET_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 
-const MAX_AGE = 60000; // 1 minuto
+const MAX_AGE = 60000; // 1 minute
 const ALLOWED_DOMAINS = ['localhost', 'cognitivapp.com'];
 const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000; // 1 segundo
+const RETRY_DELAY = 1000; // 1 second
 
 serve(async (req) => {
   try {
-    // Validar método
+    // Validate method
     if (req.method !== 'POST') {
       return new Response(
         JSON.stringify({ error: 'Método no permitido' }),
@@ -26,7 +26,7 @@ serve(async (req) => {
       );
     }
 
-    // Validar origen
+    // Validate origin
     const origin = req.headers.get('Origin');
     if (origin && !ALLOWED_DOMAINS.some(domain => origin.includes(domain))) {
       return new Response(
@@ -35,7 +35,7 @@ serve(async (req) => {
       );
     }
 
-    // Validar cuerpo de la petición
+    // Validate request body
     const { token, action, timestamp } = await req.json();
     
     if (!token || !timestamp) {
@@ -45,7 +45,7 @@ serve(async (req) => {
       );
     }
 
-    // Validar edad del token
+    // Validate token age
     if (Date.now() - timestamp > MAX_AGE) {
       return new Response(
         JSON.stringify({ error: 'Token expirado' }),
@@ -53,7 +53,7 @@ serve(async (req) => {
       );
     }
 
-    // Verificar con Google reCAPTCHA con reintentos
+    // Verify with Google reCAPTCHA with retries
     let lastError;
     for (let i = 0; i < MAX_RETRIES; i++) {
       try {
@@ -74,7 +74,7 @@ serve(async (req) => {
 
         const data = await response.json();
 
-        // Registrar verificación
+        // Log verification
         const supabase = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
         await supabase.from('security_logs').insert({
           event_type: 'RECAPTCHA_VERIFICATION',

@@ -16,13 +16,10 @@ export interface Exercise {
   id: string;
   name: string;
   level: number;
-  category: string;
-  description: string;
-  duration: number; // en minutos
-  instructions: string;
-  difficulty: number;
-  status: ExerciseStatus;
-  requiredTools?: string[];
+  description?: string;
+  instructions?: string;
+  category?: string;
+  status?: ExerciseStatus;
 }
 
 export interface CognitiveModule {
@@ -32,8 +29,6 @@ export interface CognitiveModule {
   icon: React.ReactNode;
   exercises: Exercise[];
   baselineScore: number;
-  category: string;
-  recommendedFrequency?: number;
 }
 
 // Interfaces de usuario
@@ -48,24 +43,21 @@ export interface BaseUser {
 }
 
 export interface Patient extends BaseUser {
-  doctorId: string;
+  doctorId?: string;
   diagnosis?: string;
   treatmentPlan?: TreatmentPlan;
-  progress: Progress[];
-  activationCode: string;
-  medicalHistory?: MedicalHistory;
+  activationCode?: string;
 }
 
 export interface Doctor extends BaseUser {
-  specialization: string;
-  license: string;
-  patients: string[]; // Array de IDs de pacientes
-  activationCode: string;
+  specialization?: string;
+  license?: string;
+  patients?: string[]; // Array de IDs de pacientes
   hospital?: string;
 }
 
 export interface Admin extends BaseUser {
-  permissions: string[];
+  permissions?: string[];
 }
 
 // Interfaces de tratamiento y progreso
@@ -76,50 +68,26 @@ export interface TreatmentPlan {
   startDate: Date;
   endDate?: Date;
   objectives: string[];
-  recommendedExercises: RecommendedExercise[];
-  notes: string;
+  notes?: string;
   status: 'active' | 'completed' | 'suspended';
 }
 
-export interface RecommendedExercise {
-  exerciseId: string;
-  frequency: number; // veces por semana
-  duration: number; // minutos por sesión
-  difficulty: number;
-  adaptiveProgression: boolean;
-}
-
-export interface Progress {
-  id: string;
-  patientId: string;
-  exerciseId: string;
-  date: Date;
-  score: number;
-  duration: number;
-  difficulty: number;
-  mistakes: number;
-  notes?: string;
-}
-
-export interface MedicalHistory {
-  diagnosis: string[];
-  medications: Medication[];
-  observations: string[];
-  lastUpdate: Date;
-}
-
-export interface Medication {
-  name: string;
-  dosage: string;
-  frequency: string;
-  startDate: Date;
-  endDate?: Date;
-}
-
 // Interfaces de autenticación
-export interface AuthResponse {
-  user: BaseUser;
-  token: string;
+export interface AuthState {
+  user: BaseUser | null;
+  session: any | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  userRole: UserRole | null;
+  error: Error | null;
+}
+
+export interface AuthContextType extends AuthState {
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  register: (data: RegisterFormData) => Promise<void>;
+  clearError: () => void;
+  refreshSession: () => Promise<void>;
 }
 
 export interface RegisterFormData {
@@ -130,29 +98,6 @@ export interface RegisterFormData {
   confirmPassword: string;
   role?: UserRole;
   activationCode?: string;
-}
-
-// Interfaces de análisis y reportes
-export interface ProgressReport {
-  patientId: string;
-  period: 'daily' | 'weekly' | 'monthly';
-  startDate: Date;
-  endDate: Date;
-  exercises: ExerciseProgress[];
-  overallProgress: number;
-  recommendations: string[];
-}
-
-export interface ExerciseProgress {
-  exerciseId: string;
-  attempts: number;
-  averageScore: number;
-  timeSpent: number;
-  progressTrend: number;
-}
-
-export interface ActivationCodeResponse {
-  isValid: boolean;
-  role: UserRole | null;
-  error: string | null;
+  birthDate?: string;
+  gender?: string;
 }

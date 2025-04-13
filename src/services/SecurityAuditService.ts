@@ -3,21 +3,13 @@ import { storageService } from './StorageService';
 import type { Database } from '../types/database';
 
 interface AuditLog {
-  id: string;
+  id?: string;
   timestamp: Date;
   userId?: string;
-  ipAddress: string;
+  ipAddress?: string;
   eventType: string;
   details: Record<string, any>;
   severity: 'low' | 'medium' | 'high' | 'critical';
-}
-
-interface AnomalyDetectionConfig {
-  maxLoginAttempts: number;
-  timeWindowMinutes: number;
-  workingHoursStart: number;
-  workingHoursEnd: number;
-  allowedCountries: string[];
 }
 
 interface SecurityReport {
@@ -28,27 +20,37 @@ interface SecurityReport {
   successfulLogins: number;
   failedLogins: number;
   suspiciousActivities: number;
-  topIpAddresses: { ip: string; count: number }[];
-  anomalies: AuditLog[];
 }
 
 class SecurityAuditService {
   private supabase;
-  private config: AnomalyDetectionConfig;
+  private offlineQueue: AuditLog[] = [];
+  private isOnline: boolean = navigator.onLine;
+  private readonly MAX_OFFLINE_LOGS = 100;
+  private readonly CACHE_KEY = 'security_audit_offline_logs';
 
   constructor() {
-    this.supabase = createClient<Database>(
-      import.meta.env.VITE_SUPABASE_URL,
-      import.meta.env.VITE_SUPABASE_ANON_KEY
-    );
-
-    this.config = {
-      maxLoginAttempts: 5,
-      timeWindowMinutes: 15,
-      workingHoursStart: 8, // 8 AM
-      workingHoursEnd: 20,  // 8 PM
-      allowedCountries: ['MX'], // México
-    };
+    // Inicializar cliente Supabase
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    
+    if (supabaseUrl && supabaseAnonKey) {
+      this.supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+    } else {
+      console.error('Missing Supabase environment variables');
+    }
+    
+    // Configurar eventos de conectividad
+    window.addEventListener('online', this.handleOnline.bind(this));
+    window.addEventListener('offline', this.handleOffline.bind(this));
+    
+    // Cargar logs offline almacenados
+    this.loadOfflineLogs();
+    
+    // Intentar enviar logs pendientes si estamos online
+    if (this.isOnline) {
+      this.processPendingLogs();
+    }
   }
 
   /**
@@ -60,213 +62,156 @@ class SecurityAuditService {
     severity: AuditLog['severity'] = 'low'
   ): Promise<void> {
     try {
-      const { data: ipData } = await this.supabase.functions.invoke('get-client-ip');
-      const clientIp = ipData?.ip || 'unknown';
-
-      const { error } = await this.supabase.rpc('log_security_event', {
-        p_user_id: details.userId,
-        p_ip_address: clientIp,
-        p_event_type: eventType,
-        p_details: {
+      const auditLog: AuditLog = {
+        timestamp: new Date(),
+        userId: details.userId,
+        eventType,
+        details: {
           ...details,
-          severity,
+          userAgent: navigator.userAgent,
           timestamp: new Date().toISOString(),
-        }
-      });
+        },
+        severity
+      };
 
-      if (error) throw error;
-
-      // Store critical events locally for faster access
-      if (severity === 'critical') {
-        storageService.setSecureItem(
-          `security_event_${Date.now()}`,
-          { eventType, details, severity },
-          60 // TTL: 1 hour
-        );
+      // Si estamos online, intentamos enviar directamente
+      if (this.isOnline && this.supabase) {
+        await this.sendLogToServer(auditLog);
+      } else {
+        // Si estamos offline o falló el envío, guardamos localmente
+        this.queueOfflineLog(auditLog);
       }
 
-      // Check for anomalies after logging
-      await this.detectAnomalies(eventType, clientIp, details);
-
+      // Almacenar eventos críticos localmente independientemente
+      if (severity === 'critical' || severity === 'high') {
+        this.storeLogLocally(auditLog);
+      }
     } catch (error) {
       console.error('Error logging security event:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Detects security anomalies
-   */
-  private async detectAnomalies(
-    eventType: string,
-    ipAddress: string,
-    details: Record<string, any>
-  ): Promise<void> {
-    try {
-      // Check login attempts
-      if (eventType === 'AUTH_FAILED') {
-        const { count } = await this.getRecentLoginAttempts(ipAddress);
-        if (count >= this.config.maxLoginAttempts) {
-          await this.logSecurityEvent('BRUTE_FORCE_ATTEMPT', {
-            ipAddress,
-            attemptCount: count,
-            userId: details.userId
-          }, 'critical');
-        }
-      }
-
-      // Check access time
-      const hour = new Date().getHours();
-      if (hour < this.config.workingHoursStart || hour >= this.config.workingHoursEnd) {
-        await this.logSecurityEvent('OFF_HOURS_ACCESS', {
-          ipAddress,
-          hour,
-          userId: details.userId
-        }, 'medium');
-      }
-
-      // Check location (using IP geolocation)
-      const location = await this.getIpLocation(ipAddress);
-      if (location && !this.config.allowedCountries.includes(location.country)) {
-        await this.logSecurityEvent('UNAUTHORIZED_LOCATION', {
-          ipAddress,
-          country: location.country,
-          userId: details.userId
-        }, 'high');
-      }
-
-    } catch (error) {
-      console.error('Error detecting anomalies:', error);
-    }
-  }
-
-  /**
-   * Generates security reports
-   */
-  public async generateReport(period: SecurityReport['period']): Promise<SecurityReport> {
-    const endDate = new Date();
-    const startDate = this.getReportStartDate(period);
-
-    const { data: events, error } = await this.supabase
-      .from('security_logs')
-      .select('*')
-      .gte('created_at', startDate.toISOString())
-      .lte('created_at', endDate.toISOString());
-
-    if (error) throw error;
-
-    const report: SecurityReport = {
-      period,
-      startDate,
-      endDate,
-      totalEvents: events.length,
-      successfulLogins: events.filter(e => e.event_type === 'AUTH_SUCCESS').length,
-      failedLogins: events.filter(e => e.event_type === 'AUTH_FAILED').length,
-      suspiciousActivities: events.filter(e => 
-        e.details.severity === 'high' || e.details.severity === 'critical'
-      ).length,
-      topIpAddresses: this.getTopIpAddresses(events),
-      anomalies: events
-        .filter(e => e.details.severity === 'high' || e.details.severity === 'critical')
-        .map(e => ({
-          id: e.id,
-          timestamp: new Date(e.created_at),
-          userId: e.user_id,
-          ipAddress: e.ip_address,
-          eventType: e.event_type,
-          details: e.details,
-          severity: e.details.severity
-        }))
-    };
-
-    // Store report for historical tracking
-    await this.storeReport(report);
-
-    return report;
-  }
-
-  /**
-   * Gets recent login attempts for an IP address
-   */
-  private async getRecentLoginAttempts(ipAddress: string): Promise<{ count: number }> {
-    const timeWindow = new Date();
-    timeWindow.setMinutes(timeWindow.getMinutes() - this.config.timeWindowMinutes);
-
-    const { count } = await this.supabase
-      .from('security_logs')
-      .select('*', { count: 'exact' })
-      .eq('ip_address', ipAddress)
-      .eq('event_type', 'AUTH_FAILED')
-      .gte('created_at', timeWindow.toISOString());
-
-    return { count: count || 0 };
-  }
-
-  /**
-   * Gets location information for an IP address
-   */
-  private async getIpLocation(ipAddress: string): Promise<{ country: string } | null> {
-    try {
-      const response = await fetch(`https://ipapi.co/${ipAddress}/json/`);
-      const data = await response.json();
-      return { country: data.country };
-    } catch (error) {
-      console.error('Error getting IP location:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Gets start date for report period
-   */
-  private getReportStartDate(period: SecurityReport['period']): Date {
-    const date = new Date();
-    switch (period) {
-      case 'daily':
-        date.setDate(date.getDate() - 1);
-        break;
-      case 'weekly':
-        date.setDate(date.getDate() - 7);
-        break;
-      case 'monthly':
-        date.setMonth(date.getMonth() - 1);
-        break;
-    }
-    return date;
-  }
-
-  /**
-   * Gets top IP addresses by event count
-   */
-  private getTopIpAddresses(events: any[]): { ip: string; count: number }[] {
-    const ipCounts = events.reduce((acc, event) => {
-      const ip = event.ip_address;
-      acc[ip] = (acc[ip] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-
-    return Object.entries(ipCounts)
-      .map(([ip, count]) => ({ ip, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }
-
-  /**
-   * Stores security report
-   */
-  private async storeReport(report: SecurityReport): Promise<void> {
-    const { error } = await this.supabase
-      .from('security_reports')
-      .insert({
-        period: report.period,
-        start_date: report.startDate.toISOString(),
-        end_date: report.endDate.toISOString(),
-        report_data: report
+      this.queueOfflineLog({
+        timestamp: new Date(),
+        eventType: 'LOG_ERROR',
+        details: { originalEvent: eventType, error: String(error) },
+        severity: 'medium'
       });
+    }
+  }
+
+  /**
+   * Procesa logs pendientes cuando recuperamos conexión
+   */
+  private async processPendingLogs(): Promise<void> {
+    if (!this.isOnline || !this.supabase || this.offlineQueue.length === 0) {
+      return;
+    }
+
+    const logsToProcess = [...this.offlineQueue];
+    this.offlineQueue = [];
+    
+    // Enviar logs en lotes de 10
+    const batches = [];
+    for (let i = 0; i < logsToProcess.length; i += 10) {
+      batches.push(logsToProcess.slice(i, i + 10));
+    }
+    
+    for (const batch of batches) {
+      try {
+        await Promise.all(batch.map(log => this.sendLogToServer(log)));
+      } catch (error) {
+        console.error('Error processing security log batch:', error);
+        // Devolver los logs fallidos a la cola
+        this.offlineQueue.push(...batch);
+        break;
+      }
+    }
+    
+    // Actualizar la caché de logs pendientes
+    this.saveOfflineLogs();
+  }
+
+  /**
+   * Envía un log al servidor
+   */
+  private async sendLogToServer(log: AuditLog): Promise<void> {
+    if (!this.supabase) {
+      throw new Error('Supabase client not initialized');
+    }
+
+    const { error } = await this.supabase.from('security_logs').insert({
+      user_id: log.userId,
+      ip_address: log.ipAddress || null,
+      event_type: log.eventType,
+      details: {
+        ...log.details,
+        severity: log.severity
+      }
+    });
 
     if (error) throw error;
+  }
+
+  /**
+   * Añade un log a la cola de logs offline
+   */
+  private queueOfflineLog(log: AuditLog): void {
+    this.offlineQueue.push(log);
+    
+    // Limitar tamaño de la cola
+    if (this.offlineQueue.length > this.MAX_OFFLINE_LOGS) {
+      this.offlineQueue = this.offlineQueue.slice(-this.MAX_OFFLINE_LOGS);
+    }
+    
+    this.saveOfflineLogs();
+  }
+
+  /**
+   * Guarda un log importante localmente
+   */
+  private storeLogLocally(log: AuditLog): void {
+    const key = `security_log_${Date.now()}`;
+    storageService.setSecureItem(key, log, 1440); // TTL: 24 horas
+  }
+
+  /**
+   * Guarda los logs offline en localStorage
+   */
+  private saveOfflineLogs(): void {
+    try {
+      storageService.setSecureItem(this.CACHE_KEY, this.offlineQueue, 1440); // TTL: 24 horas
+    } catch (error) {
+      console.error('Error saving offline logs:', error);
+    }
+  }
+
+  /**
+   * Carga los logs offline desde localStorage
+   */
+  private loadOfflineLogs(): void {
+    try {
+      const savedLogs = storageService.getSecureItem<AuditLog[]>(this.CACHE_KEY);
+      if (savedLogs && Array.isArray(savedLogs)) {
+        this.offlineQueue = savedLogs;
+      }
+    } catch (error) {
+      console.error('Error loading offline logs:', error);
+    }
+  }
+
+  /**
+   * Manejador para evento online
+   */
+  private handleOnline(): void {
+    this.isOnline = true;
+    this.processPendingLogs();
+  }
+
+  /**
+   * Manejador para evento offline
+   */
+  private handleOffline(): void {
+    this.isOnline = false;
   }
 }
 
-// Export singleton instance
+// Exportar singleton instance
 export const securityAuditService = new SecurityAuditService();

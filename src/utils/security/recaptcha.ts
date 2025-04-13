@@ -9,7 +9,7 @@ interface VerifyRecaptchaResponse {
   error?: string[];
 }
 
-const MIN_SCORE = 0.7;
+const MIN_SCORE = 0.5;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const tokenCache = new Map<string, {
   timestamp: number;
@@ -24,6 +24,7 @@ export async function verifyRecaptcha(token: string): Promise<boolean> {
       return cached.result;
     }
 
+    // Verify with backend
     const { data, error } = await supabase.functions.invoke('verify-recaptcha', {
       body: { 
         token,
@@ -32,13 +33,18 @@ export async function verifyRecaptcha(token: string): Promise<boolean> {
     });
 
     if (error) {
-      console.error('reCAPTCHA verification error:', error);
+      console.error('Error verifying reCAPTCHA:', error);
       return false;
     }
 
     const response = data as VerifyRecaptchaResponse;
     
-    const result = response.success && response.score >= MIN_SCORE;
+    if (!response.success) {
+      console.error('reCAPTCHA verification failed:', response.error);
+      return false;
+    }
+
+    const result = response.score >= MIN_SCORE;
 
     // Cache result
     tokenCache.set(token, {
@@ -46,9 +52,31 @@ export async function verifyRecaptcha(token: string): Promise<boolean> {
       result
     });
 
+    // Log verification
+    await supabase.from('security_logs').insert({
+      event_type: 'RECAPTCHA_VERIFICATION',
+      details: {
+        success: result,
+        score: response.score,
+        hostname: response.hostname,
+        timestamp: new Date().toISOString()
+      },
+      severity: result ? 'low' : 'medium'
+    });
+
     return result;
   } catch (error) {
-    console.error('Error verifying reCAPTCHA:', error);
+    console.error('Error in reCAPTCHA verification:', error);
     return false;
   }
 }
+
+// Clean cache periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of tokenCache.entries()) {
+    if (now - data.timestamp > CACHE_TTL) {
+      tokenCache.delete(token);
+    }
+  }
+}, CACHE_TTL);
